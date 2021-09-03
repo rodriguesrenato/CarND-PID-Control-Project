@@ -1,5 +1,12 @@
 # CarND-Controls-PID
-Self-Driving Car Engineer Nanodegree Program
+
+![](images/pid_30mph_c3.gif)
+
+This project implements a PID controller for the simulated car drives close as possible to the center of the lane and perform a full lap around the lake trak of the Udacity Term2 Simulator.
+
+A video of the car performing a full lap can be found [here](https://youtu.be/_DgkelTIHSw).
+
+This is the 8th project of the Udacity Self-Driving Car Engineer Nanodegree Program.
 
 ---
 
@@ -37,62 +44,66 @@ Fellow students have put together a guide to Windows set-up for the project [her
 
 Tips for setting up your environment can be found [here](https://classroom.udacity.com/nanodegrees/nd013/parts/40f38239-66b6-46ec-ae68-03afd8a601c8/modules/0949fca6-b379-42af-a919-ee50aa304e6a/lessons/f758c44c-5e40-4e01-93b5-1a82aa4e044f/concepts/23d376c7-0195-4276-bdf0-e02f1f3c665d)
 
-## Editor Settings
 
-We've purposefully kept editor configuration files out of this repo in order to
-keep it as simple and environment agnostic as possible. However, we recommend
-using the following settings:
+## Results
 
-* indent using spaces
-* set tab width to 2 spaces (keeps the matrices in source code aligned)
+These are the parameters for each successful test:
 
-## Code Style
+- **Test 1** - `Throttle`: 0.3, `speed`: 34mph, `PID params`: [0.11,0.0,2.5]
+- **Test 2** - `Throttle`: 0.3, `speed`: 34mph, `PID params`: [0.12,0.006,3.5]
+- **Test 3** - `Throttle`: 0.4, `speed`: 40mph, `PID params`: [0.12,0.01,3.5]
 
-Please (do your best to) stick to [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
+Before start tuning the params, I build a debug function to print all the variables, which helped me understand effects of each params on each error and the final output of the pid controller. This is an example of a line of the printed output on the terminal:
 
-## Project Instructions and Rubric
+```shell
+   CTE: 0.464   angle/steer_angle:   -2.492|   -0.110 Total Error:   -0.110 | Err:    0.464,  360.325,    0.021 | K * Err:   -0.049,   -0.000,   -0.062
+```
 
-Note: regardless of the changes you make, your project must be buildable using
-cmake and make!
+On the `Err` and `K * Err` sections, the respective values follow this sequence: `proportional`,`integral`,`derivative` terms of the PID controller.
 
-More information is only accessible by people who are already enrolled in Term 2
-of CarND. If you are enrolled, see [the project page](https://classroom.udacity.com/nanodegrees/nd013/parts/40f38239-66b6-46ec-ae68-03afd8a601c8/modules/f1820894-8322-4bb3-81aa-b26b3c6dcbaf/lessons/e8235395-22dd-4b87-88e0-d108c5e5bbf4/concepts/6a4d8d42-6a04-4aa6-b284-1697c0fd6562)
-for instructions and the project rubric.
+The start point is to find a good candidate for the `Kp` value. Values around `0.1` results in acceptable oscillatory behaviour around the center of the lane to be used as a start point to tune next parameters.
 
-## Hints!
+-  using higher Kp, the car oscillates more around the center of the lane, straight or curved path.
+- using a lower Kp, it reduces the oscillations, but reduces the response on curves. 
 
-* You don't have to follow this directory structure, but if you do, your work
-  will span all of the .cpp files here. Keep an eye out for TODOs.
+The following parameter to be tuned was the `kd`. Multiple tests were done starting from `kd=1.0` and higher `kd` values performed better than lower ones.  
 
-## Call for IDE Profiles Pull Requests
+- High `Kd` reflects in quicker corrections, but with a cost of higher jerk.
+- Values around `2.0` to `4.0` were acceptable, and the `kd` has to be tuned along with `Kp` to find the best combination for a target speed.
+- `kd` should be higher for higher target speed to keep the car in the lane area on a curve.
 
-Help your fellow students!
+Finally, the `Ki` parameter is going to be tuned. For the integral term of the controller, the update step of the PID controller was implemented in two versions:
 
-We decided to create Makefiles with cmake to keep this project as platform
-agnostic as possible. Similarly, we omitted IDE profiles in order to we ensure
-that students don't feel pressured to use one IDE or another.
+- Version 1 - The standard way : 
 
-However! I'd love to help people get up and running with their IDEs of choice.
-If you've created a profile for an IDE that you think other students would
-appreciate, we'd love to have you add the requisite profile files and
-instructions to ide_profiles/. For example if you wanted to add a VS Code
-profile, you'd add:
+```c++
+i_error_ += cte;
+```
 
-* /ide_profiles/vscode/.vscode
-* /ide_profiles/vscode/README.md
+- Version 2 - Integral windup with zero-crossing reset [[1]](https://en.wikipedia.org/wiki/Integral_windup) [[2]](https://www.cds.caltech.edu/~murray/courses/cds101/fa02/caltech/astrom-ch6.pdf) and cte buffer with fixed size:
 
-The README should explain what the profile does, how to take advantage of it,
-and how to install it.
+```c++
+if (cte > 0 && p_error_ < 0 || cte < 0 && p_error_ > 0) {
+    cte_int_.clear();
+  }
+  cte_int_.push_back(cte);
+  if (cte_int_.size() > integral_buffer_size) {
+    cte_int_.erase(cte_int_.begin());
+  }
+  i_error_ = 0;
+  for (auto i : cte_int_) {
+    i_error_ += i;
+  }
+```
 
-Frankly, I've never been involved in a project with multiple IDE profiles
-before. I believe the best way to handle this would be to keep them out of the
-repo root to avoid clutter. My expectation is that most profiles will include
-instructions to copy files to a new location to get picked up by the IDE, but
-that's just a guess.
+The **version 1** is the classic solution and workes fine except when the speed is low (error accumulates faster to large values) and when the car takes more time to get back to center, especially on curves going with high speed, resulting in a high accumulated error that takes too long to stabilizes.
 
-One last note here: regardless of the IDE used, every submitted project must
-still be compilable with cmake and make./
+The **version 2** was a combination of a solution mentioned for this problem, called **integral windup**, with a buffer of the previous errors. This approach partially solves the problems mentioned previously. The buffer of previous errors with fixed size helps to avoid large accumulated errors. The buffer is cleared on zero crossing cte to reset the accumulated error and start a new cycle from the set point.
 
-## How to write a README
-A well written README file can enhance your project and portfolio.  Develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
+The version chosen was **version 2**, which gives much better results. As the accumulated error can get higher than the `proportional` and the `derivative` errors, it was tuned starting from `0.001` and ending with values between `0.006` and `0.01`.
 
+The `PD` controller worked well for this simulation. When compared to `PID` controller, the `PD` has lower oscillations around the center of the lane, but most of the time the car takes much more time to get closer to the center of the lane, sometimes it drives better but at cost of driver close ( cte near zero, but not crossing) to the center of lane.
+
+The `PID` controller worked better than `PD` in some situations, especially on straight sections of the track.
+
+There are also two different configurations for the PID controller for different speeds: `Phase::LowSpeed` and `Phase::HighSpeed`. When testing this controller at higher speeds, it was tested with different PID configurations to improve the response due to the response time begin different according to speed.
