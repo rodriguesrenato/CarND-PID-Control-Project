@@ -1,9 +1,13 @@
 #include <math.h>
 #include <uWS/uWS.h>
+
+#include <iomanip>
 #include <iostream>
+#include <map>
 #include <string>
-#include "json.hpp"
+
 #include "PID.h"
+#include "json.hpp"
 
 // for convenience
 using nlohmann::json;
@@ -23,23 +27,29 @@ string hasData(string s) {
   auto b2 = s.find_last_of("]");
   if (found_null != string::npos) {
     return "";
-  }
-  else if (b1 != string::npos && b2 != string::npos) {
+  } else if (b1 != string::npos && b2 != string::npos) {
     return s.substr(b1, b2 - b1 + 1);
   }
   return "";
 }
 
+enum Phase { LowSpeed, HighSpeed };
+
 int main() {
   uWS::Hub h;
 
   PID pid;
-  /**
-   * TODO: Initialize the pid variable.
-   */
+  // Initialize the pid controller params
+  std::map<Phase, vector<double>> pid_params;
+  pid_params[Phase::LowSpeed] = {0.12, 0.0, 2.5};
+  pid_params[Phase::HighSpeed] = {0.12, 0.006, 3.5};
+  auto p = pid_params[Phase::LowSpeed];
+  pid.Init(p[0], p[1], p[2]);
+  Phase phase = Phase::LowSpeed;
 
-  h.onMessage([&pid](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, 
-                     uWS::OpCode opCode) {
+  h.onMessage([&pid, &phase, &pid_params](uWS::WebSocket<uWS::SERVER> ws,
+                                          char *data, size_t length,
+                                          uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -56,23 +66,36 @@ int main() {
           double cte = std::stod(j[1]["cte"].get<string>());
           double speed = std::stod(j[1]["speed"].get<string>());
           double angle = std::stod(j[1]["steering_angle"].get<string>());
-          double steer_value;
-          /**
-           * TODO: Calculate steering value here, remember the steering value is
-           *   [-1, 1].
-           * NOTE: Feel free to play around with the throttle and speed.
-           *   Maybe use another PID controller to control the speed!
-           */
-          
+
+          double throttle = 0.30;
+          if (speed > 20.0 && phase != Phase::HighSpeed) {
+            auto p = pid_params[Phase::HighSpeed];
+            pid.Init(p[0], p[1], p[2]);
+            phase = Phase::HighSpeed;
+          } else if (speed < 20.0 && phase != Phase::LowSpeed) {
+            auto p = pid_params[Phase::LowSpeed];
+            pid.Init(p[0], p[1], p[2]);
+            phase = Phase::LowSpeed;
+          }
+
+          pid.UpdateError(cte);
+
+          double steer_value = pid.TotalError();
+          if (steer_value > 1) steer_value = 1;
+          if (steer_value < -1) steer_value = -1;
+
           // DEBUG
-          std::cout << "CTE: " << cte << " Steering Value: " << steer_value 
-                    << std::endl;
+          std::cout << std::fixed << std::setprecision(3) << std::setw(8)
+                    << "CTE: " << cte << "\tangle/steer: " << std::setw(8)
+                    << angle << "| " << std::setw(8) << steer_value;
+          pid.Print();
+          std::cout << std::endl;
 
           json msgJson;
           msgJson["steering_angle"] = steer_value;
-          msgJson["throttle"] = 0.3;
+          msgJson["throttle"] = throttle;
           auto msg = "42[\"steer\"," + msgJson.dump() + "]";
-          std::cout << msg << std::endl;
+          // std::cout << msg << std::endl;
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }  // end "telemetry" if
       } else {
@@ -81,13 +104,13 @@ int main() {
         ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
       }
     }  // end websocket message if
-  }); // end h.onMessage
+  });  // end h.onMessage
 
   h.onConnection([&h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
     std::cout << "Connected!!!" << std::endl;
   });
 
-  h.onDisconnection([&h](uWS::WebSocket<uWS::SERVER> ws, int code, 
+  h.onDisconnection([&h](uWS::WebSocket<uWS::SERVER> ws, int code,
                          char *message, size_t length) {
     ws.close();
     std::cout << "Disconnected" << std::endl;
@@ -100,6 +123,6 @@ int main() {
     std::cerr << "Failed to listen to port" << std::endl;
     return -1;
   }
-  
+
   h.run();
 }
